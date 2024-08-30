@@ -1,0 +1,15 @@
+202d36ad3b4ba39ef57ebf5ae56aa6ce *DESCRIPTION
+d14b632b8536187038210da3fdfb3fe8 *LICENSE
+d9a140f21ec65c9d1e52007f9222101c *NAMESPACE
+7dcb799abc390f0d2e496d27fd1e0b24 *NEWS.md
+5a4f04bf558d1334916a0df8cff58cea *R/add_flowmap.R
+78bde3007b7e85d5eb234f2307b94ee6 *R/data.R
+0792d442c677e98b11963923f3b993de *R/hca_flowdat.R
+1e05103edc4bcc522e5c63ca6319c5cf *data/CH_migration_data.rda
+02320a066a713f444d31471d3b274379 *data/cantons.rda
+5c42333ae7f7e372f35dd304a3f89a99 *man/CH_migration_data.Rd
+06349518a96407910ebec111aafab4ef *man/add_flowmap.Rd
+bf7f8ce0b1bd4295394a55afd6f0274c *man/cantons.Rd
+c0e2a8245e2c32032f382f7f53c56cf0 *man/get_circle_coords.Rd
+8910fd90a8aa7bf761653b4f6019a092 *man/hca_flowdat.Rd
+2334cf5e78ae246a3bc6cf5877be9aca *man/short_scale.Rd
