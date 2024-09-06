@@ -1,15 +1,17 @@
 utils::globalVariables(c("a_b","a_m","adj_radius","adj_radius_a","adj_radius_b",
-                         "aes","aux1","aux2","e","flow","flow_ab","flow_ba",
+                         "aes","aux1","aux2","e","flow","flow_ab","flow_ba","flows",
                          "flowsum","group","id","id_a","id_b","label","m_c",
                          "name","off_x","off_y","point","radius","value",
                          "width","x","xa","xb","xe","xf","xg","xm","xz","y",
-                         "ya","yb","ye","yf","yg","ym","yz"))
+                         "ya","yb","ye","yf","yg","ym","yz","o","d","."))
 
 #' Add a flow map to a ggplot
 #'
 #' @param p The plot to which the flowmap should be added.
-#' @param k_nodes Number of clusters to group nodes into. If defined, nodes will be clustered hierarchically based on spatial proximity. By default, no clustering will be applied.
 #' @param flowdat Input dataframe. See details below.
+#' @param od As an alternative to \code{flowdat}, dataframe with the origin-destination pairs and the flow between them.  Must contain the columns o, d, value. \code{nodes} must be provided as well. See details below.
+#' @param nodes As an alternative to \code{flowdat}, a dataframe with the nodes of the network. Must contain the columns name, x, y. See details below.
+#' @param k_nodes Number of clusters to group nodes into. If defined, nodes will be clustered hierarchically based on spatial proximity. By default, no clustering will be applied.
 #' @param node_buffer_factor Controls the distance between the nodes and the edges ( in multiple of the nodes' radii).
 #' @param node_radius_factor Controls the size of the nodes.
 #' @param node_fill_factor Controls the downscaling of the fill of the nodes ( as to not outshine the edges ).
@@ -38,11 +40,24 @@ utils::globalVariables(c("a_b","a_m","adj_radius","adj_radius_a","adj_radius_b",
 #'  \item \strong{flow_ba:} The intensity of flow from node b to node a
 #' }
 #'
+#' Alternatively, the function can take as input a dataframe \code{od} which contains the origin-destination pairs and the flow between them. The dataframe should have the following columns:
+#' \itemize{
+#' \item \strong{o:} The unique id of the origin node
+#' \item \strong{d:} The unique id of the destination node
+#' \item \strong{value:} The intensity of flow between the origin and destination
+#' }
+#' In this case, the function also requires a dataframe \code{nodes} which contains the coordinates of the nodes. The dataframe should have the following columns:
+#' \itemize{
+#' \item \strong{name:} The unique id of the node
+#' \item \strong{x:} The x coordinate of the node
+#' \item \strong{y:} The y coordinate of the node
+#' }
+#'
 #' The function will impose coord_equal() on the ggplot.
 #'
 #' Inspired by \href{https://flowmap.gl/}{flowmap.gl}.
 #'
-#' @importFrom dplyr mutate select left_join summarize group_by ungroup bind_rows n arrange group_split n_distinct
+#' @importFrom dplyr mutate select left_join summarize group_by ungroup bind_rows n arrange group_split n_distinct across where filter_all coalesce all_vars
 #' @importFrom tidyr pivot_longer separate
 #' @importFrom forcats fct_reorder
 #' @importFrom ggplot2 ggplot geom_polygon annotate
@@ -65,15 +80,41 @@ utils::globalVariables(c("a_b","a_m","adj_radius","adj_radius_a","adj_radius_b",
 #' library(ggplot2)
 #' plot <- ggplot()
 #' plot |> add_flowmap(testdata)
-add_flowmap <- function(p,flowdat,outline_linewidth=0.01,alpha=0.8,nodes_alpha=0.8,outline_col="black",k_nodes=NULL,node_buffer_factor = 1.2, node_radius_factor = 1, edge_offset_factor = 1, node_fill_factor = NULL, edge_width_factor = 1.2, arrow_point_angle = 45,add_legend="none",legend_nudge_x=0,legend_nudge_y=0,legend_col="gray"){
+add_flowmap <- function(p,flowdat=NULL,od=NULL,nodes=NULL,outline_linewidth=0.01,alpha=0.8,nodes_alpha=0.8,outline_col="black",k_nodes=NULL,node_buffer_factor = 1.2, node_radius_factor = 1, edge_offset_factor = 1, node_fill_factor = NULL, edge_width_factor = 1.2, arrow_point_angle = 45,add_legend="none",legend_nudge_x=0,legend_nudge_y=0,legend_col="gray"){
 
+  if(!is.null(od) & is.null(nodes)){
+    stop("When providing data in od format, nodes (a dataframe with the nodes coordiantes) must be defined as well.")
+  }
+
+  if(!is.null(od) & is.null(nodes)){
+    stop("When providing nodes, od must be defined as well.")
+  }
+
+  if(!is.null(flowdat) & !is.null(od)){
+    stop("Only one of flowdat or od can be defined.")
+  }
+
+  if(is.null(flowdat) & is.null(od)){
+    stop("Either flowdat or od must be defined.")
+  }
+
+  if(is.null(flowdat) & !is.null(od) & !is.null(nodes)){
+    #force convert columns o and d to characters
+    od <- od |> mutate(o=as.character(o),d=as.character(d))
+    # force convert column name to character
+    nodes <- nodes |> mutate(name=as.character(name))
+    flowdat <- util_data_flow_to_flowdat(nodes,od)
+  }
+
+  if(inherits(flowdat,"grouped_df")){
+    flowdat <- flowdat |> dplyr::ungroup()
+  }
   # Some checks
   if(arrow_point_angle>75){arrow_point_angle <- 75; warning("Warning. arrow_point_angle cannot exceed 75 degrees")}
   if(arrow_point_angle<20){arrow_point_angle <- 20; warning("Warning. arrow_point_angle cannot be lower than 20 degrees")}
   if(!add_legend %in% c("top","bottom","none","right","left")){
     warning("add_legend must be either 'top', 'bottom','right','left', or 'none'. Defaulting to 'none'.")
     add_legend <- "none"}
-
 
   if(!is.null(k_nodes)){
     flowdat <- hca_flowdat(flowdat,k_nodes)
@@ -82,10 +123,14 @@ add_flowmap <- function(p,flowdat,outline_linewidth=0.01,alpha=0.8,nodes_alpha=0
       warning("Number of flows very high. Consider setting k_nodes to cluster nodes.")
     }
   }
+
   flowdat <- flowdat |> dplyr::filter(id_a!=id_b)
 
+  #force convert factor columns to character
+  flowdat <- flowdat |> dplyr::mutate(dplyr::across(dplyr::where(is.factor), as.character))
 
-
+  # remove any row with a missing value in any column
+  flowdat <- flowdat |> dplyr::filter_all(dplyr::all_vars(!is.na(.)))
 
   nodes <-
     bind_rows(
@@ -298,6 +343,9 @@ add_flowmap <- function(p,flowdat,outline_linewidth=0.01,alpha=0.8,nodes_alpha=0
       label=paste0("Route: ",group,"\nFlow: ",flow),
       group=forcats::fct_reorder(group,flowsum)
     )
+
+  plot_df <-
+    plot_df |> group_by(label) |> filter(sum(flow)>0) |> ungroup()
 
   # for the nodes, calculate the flow to be visualized (as fill) from the node_fill_factor and their flow sum
   nodes <-
@@ -579,7 +627,39 @@ short_scale = function(x, digits=3) {
   )
 }
 
+#' Helper function to merge od data in long data and nodes to flowdat format
+#' @title util_data_flow_to_flowdat
+#' @description This function takes a flow data frame in long format and a data frame with the nodes coordinates and returns a flowdat data frame
+#' @param nodes A data frame with the nodes of the network
+#' @param flows A data frame with the flow data
+#' @return A data frame with the flow data in flowdat format
+#' @author Johannes Mast,
+#' @importFrom dplyr full_join select rename mutate coalesce filter left_join
+#' @examples
+#' #nodes <- data.frame(name=c("a","b","c"),x=c(0,1,2),y=c(0,1,2))
+#' #flow <- data.frame(o=c("a","b"),d=c("b","c"),value=c(1,2))
+#' #util_data_flow_to_flowdat(nodes,flow)
+util_data_flow_to_flowdat <- function(nodes,flows){
 
+  missing_nodes_o = unique(flows$o) %in% nodes$name
+  missing_nodes_d = unique(flows$d) %in% nodes$name
+  if(sum(!missing_nodes_o)>0) message(sum(!missing_nodes_o), " flow origins with no match in nodes names")
+  if(sum(!missing_nodes_d)>0) message(sum(!missing_nodes_d), " flow destinations with no match in nodes names")
+
+  f <-
+    flows |>
+    dplyr::full_join(flows |> dplyr::select(d=o,o=d,flow_ba=value),by=c("o", "d")) |>
+    dplyr::rename(flow_ab=value) |>
+    dplyr::mutate(flow_ab=dplyr::coalesce(flow_ab,0L),
+                  flow_ba=dplyr::coalesce(flow_ba,0L))|>
+    dplyr::rename(id_a=o,id_b=d) |>
+    dplyr::filter(id_a>=id_b)
+  flowdat <-
+    f |>
+    dplyr::left_join(nodes |> dplyr::select(name,xa=x,ya=y),by=c("id_a"="name"))|>
+    dplyr::left_join(nodes |> dplyr::select(name,xb=x,yb=y),by=c("id_b"="name"))
+  return(flowdat)
+}
 
 #'
 #' Helper function to create coordinates for circles of nodes
